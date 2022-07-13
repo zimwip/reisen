@@ -1,4 +1,4 @@
-module github.com/zergon321/reisen
+module github.com/zimwip/reisen
 
 go 1.17
 

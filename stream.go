@@ -101,6 +101,8 @@ type Stream interface {
 	// Rewind rewinds the whole media to the
 	// specified time location based on the stream.
 	Rewind(time.Duration) error
+	// Flush the codec buffer
+	Flush()
 	// ApplyFilter applies a filter defined
 	// by the given string to the stream.
 	ApplyFilter(string) error
@@ -316,8 +318,12 @@ func (stream *baseStream) Rewind(t time.Duration) error {
 		return fmt.Errorf(
 			"%d: couldn't rewind the stream", status)
 	}
-
 	return nil
+}
+
+// Flush the codec buffer
+func (stream *baseStream) Flush() {
+	C.avcodec_flush_buffers(stream.codecCtx)
 }
 
 // innerStream returns the inner
