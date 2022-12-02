@@ -1,6 +1,6 @@
 package reisen
 
-// #cgo LDFLAGS: -lavutil -lavformat -lavcodec -lswresample
+// #cgo pkg-config: libavformat libavcodec libavutil libswresample
 // #include <libavcodec/avcodec.h>
 // #include <libavformat/avformat.h>
 // #include <libavutil/avutil.h>
@@ -22,8 +22,9 @@ const (
 // audio frames consisting of audio samples.
 type AudioStream struct {
 	baseStream
-	swrCtx *C.SwrContext
-	buffer *C.uint8_t
+	swrCtx     *C.SwrContext
+	buffer     *C.uint8_t
+	bufferSize C.int
 }
 
 // ChannelCount returns the number of channels
@@ -109,9 +110,15 @@ func (audio *AudioStream) ReadAudioFrame() (*AudioFrame, bool, error) {
 			"%d: couldn't get the max buffer size", maxBufferSize)
 	}
 
+	if maxBufferSize > audio.bufferSize {
+		C.av_free(unsafe.Pointer(audio.buffer))
+		audio.buffer = nil
+	}
+
 	if audio.buffer == nil {
 		audio.buffer = (*C.uint8_t)(unsafe.Pointer(
 			C.av_malloc(bufferSize(maxBufferSize))))
+		audio.bufferSize = maxBufferSize
 
 		if audio.buffer == nil {
 			return nil, false, fmt.Errorf(
