@@ -229,6 +229,7 @@ func (media *Media) CloseDecode() error {
 
 // Close closes the media container.
 func (media *Media) Close() {
+	C.avformat_close_input(&media.ctx)
 	C.avformat_free_context(media.ctx)
 	media.ctx = nil
 }
