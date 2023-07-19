@@ -90,7 +90,9 @@ func (video *VideoStream) OpenDecode(width, height int, alg InterpolationAlgorit
 		return fmt.Errorf(
 			"%d: couldn't fill the image arrays", status)
 	}
-
+	if video.codecCtx.pix_fmt < 0 {
+		return fmt.Errorf("Invalid Pixel Format, not able to convert")
+	}
 	video.swsCtx = C.sws_getContext(video.codecCtx.width,
 		video.codecCtx.height, video.codecCtx.pix_fmt,
 		C.int(width), C.int(height),
