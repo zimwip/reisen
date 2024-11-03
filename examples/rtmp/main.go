@@ -11,7 +11,7 @@ import (
 	"github.com/faiface/beep/speaker"
 	"github.com/hajimehoshi/ebiten"
 	_ "github.com/silbinarywolf/preferdiscretegpu"
-	"github.com/zergon321/reisen"
+	"github.com/zimwip/reisen"
 )
 
 const (
@@ -35,21 +35,18 @@ func readVideoAndAudio(media *reisen.Media) (<-chan *image.RGBA, <-chan [2]float
 	errs := make(chan error)
 
 	err := media.OpenDecode()
-
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	videoStream := media.VideoStreams()[0]
 	err = videoStream.Open()
-
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
 	audioStream := media.AudioStreams()[0]
 	err = audioStream.Open()
-
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -69,7 +66,6 @@ func readVideoAndAudio(media *reisen.Media) (<-chan *image.RGBA, <-chan [2]float
 	go func() {
 		for {
 			packet, gotPacket, err := media.ReadPacket()
-
 			if err != nil {
 				go func(err error) {
 					errs <- err
@@ -87,7 +83,6 @@ func readVideoAndAudio(media *reisen.Media) (<-chan *image.RGBA, <-chan [2]float
 			case reisen.StreamVideo:
 				s := media.Streams()[packet.StreamIndex()].(*reisen.VideoStream)
 				videoFrame, gotFrame, err := s.ReadVideoFrame()
-
 				if err != nil {
 					go func(err error) {
 						errs <- err
@@ -110,7 +105,6 @@ func readVideoAndAudio(media *reisen.Media) (<-chan *image.RGBA, <-chan [2]float
 			case reisen.StreamAudio:
 				s := media.Streams()[packet.StreamIndex()].(*reisen.AudioStream)
 				audioFrame, gotFrame, err := s.ReadAudioFrame()
-
 				if err != nil {
 					go func(err error) {
 						errs <- err
@@ -138,7 +132,6 @@ func readVideoAndAudio(media *reisen.Media) (<-chan *image.RGBA, <-chan [2]float
 					sample := [2]float64{0, 0}
 					var result float64
 					err = binary.Read(reader, binary.LittleEndian, &result)
-
 					if err != nil {
 						go func(err error) {
 							errs <- err
@@ -148,7 +141,6 @@ func readVideoAndAudio(media *reisen.Media) (<-chan *image.RGBA, <-chan [2]float
 					sample[0] = result
 
 					err = binary.Read(reader, binary.LittleEndian, &result)
-
 					if err != nil {
 						go func(err error) {
 							errs <- err
@@ -227,7 +219,6 @@ func (game *Game) Start(fname string) error {
 	// Initialize the audio speaker.
 	err = speaker.Init(sampleRate,
 		SpeakerSampleRate.N(time.Second/10))
-
 	if err != nil {
 		return err
 	}
@@ -235,14 +226,12 @@ func (game *Game) Start(fname string) error {
 	// Sprite for drawing video frames.
 	game.videoSprite, err = ebiten.NewImage(
 		width, height, ebiten.FilterDefault)
-
 	if err != nil {
 		return err
 	}
 
 	// Open the media file.
 	media, err := reisen.NewMedia(fname)
-
 	if err != nil {
 		return err
 	}
@@ -259,7 +248,6 @@ func (game *Game) Start(fname string) error {
 	spf := 1.0 / float64(videoFPS)
 	frameDuration, err := time.
 		ParseDuration(fmt.Sprintf("%fs", spf))
-
 	if err != nil {
 		return err
 	}
@@ -268,7 +256,6 @@ func (game *Game) Start(fname string) error {
 	var sampleSource <-chan [2]float64
 	game.frameBuffer, sampleSource,
 		game.errs, err = readVideoAndAudio(media)
-
 	if err != nil {
 		return err
 	}
@@ -321,7 +308,6 @@ func (game *Game) Update(screen *ebiten.Image) error {
 	// Draw the video sprite.
 	op := &ebiten.DrawImageOptions{}
 	err := screen.DrawImage(game.videoSprite, op)
-
 	if err != nil {
 		return err
 	}

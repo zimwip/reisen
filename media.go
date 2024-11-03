@@ -1,6 +1,6 @@
 package reisen
 
-// #cgo pkg-config: libavformat libavcodec libavutil libswscale
+// #cgo pkg-config: libavformat libavcodec libavutil libswscale libwebp
 // #include <libavcodec/avcodec.h>
 // #include <libavformat/avformat.h>
 // #include <libavutil/avconfig.h>

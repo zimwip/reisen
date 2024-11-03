@@ -8,7 +8,10 @@ package reisen
 // #include <libswscale/swscale.h>
 // #include <inttypes.h>
 import "C"
-import "image"
+
+import (
+	"image"
+)
 
 // VideoFrame is a single frame
 // of a video stream.

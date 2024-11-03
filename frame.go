@@ -8,6 +8,7 @@ package reisen
 // #include <libswscale/swscale.h>
 // #include <inttypes.h>
 import "C"
+
 import (
 	"fmt"
 	"time"
