@@ -8,6 +8,7 @@ package reisen
 // #include <libswscale/swscale.h>
 // #include <inttypes.h>
 import "C"
+
 import (
 	"fmt"
 	"unsafe"
@@ -54,7 +55,6 @@ func (video *VideoStream) Open() error {
 // decoding with the specified parameters.
 func (video *VideoStream) OpenDecode(width, height int, alg InterpolationAlgorithm) error {
 	err := video.open()
-
 	if err != nil {
 		return err
 	}
@@ -115,7 +115,6 @@ func (video *VideoStream) ReadFrame() (Frame, bool, error) {
 // from the video stream.
 func (video *VideoStream) ReadVideoFrame() (*VideoFrame, bool, error) {
 	ok, err := video.read()
-
 	if err != nil {
 		return nil, false, err
 	}
@@ -139,8 +138,6 @@ func (video *VideoStream) ReadVideoFrame() (*VideoFrame, bool, error) {
 		Pointer(video.rgbaFrame.data[0]),
 		video.bufSize)
 	frame := newVideoFrame(video, int64(video.frame.pts),
-		int(video.frame.coded_picture_number),
-		int(video.frame.display_picture_number),
 		int(video.codecCtx.width), int(video.codecCtx.height), data)
 
 	return frame, true, nil
@@ -149,7 +146,6 @@ func (video *VideoStream) ReadVideoFrame() (*VideoFrame, bool, error) {
 // Close closes the video stream for decoding.
 func (video *VideoStream) Close() error {
 	err := video.close()
-
 	if err != nil {
 		return err
 	}

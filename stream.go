@@ -6,6 +6,7 @@ package reisen
 // #include <libavutil/avconfig.h>
 // #include <libavcodec/bsf.h>
 import "C"
+
 import (
 	"fmt"
 	"time"
@@ -438,11 +439,11 @@ func (stream *baseStream) close() error {
 	C.av_free(unsafe.Pointer(stream.frame))
 	stream.frame = nil
 
-	status := C.avcodec_close(stream.codecCtx)
-	if status < 0 {
-		return fmt.Errorf(
-			"%d: couldn't close the codec", status)
-	}
+	// status := C.avcodec_free_context(&stream.codecCtx)
+	// if status < 0 {
+	// 	return fmt.Errorf(
+	// 		"%d: couldn't close the codec", status)
+	// }
 
 	C.avcodec_free_context(&stream.codecCtx)
 

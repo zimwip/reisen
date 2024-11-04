@@ -32,7 +32,7 @@ type AudioStream struct {
 // ChannelCount returns the number of channels
 // (1 for mono, 2 for stereo, etc.).
 func (audio *AudioStream) ChannelCount() int {
-	return int(audio.codecParams.channels)
+	return int(audio.codecParams.ch_layout.nb_channels)
 }
 
 // SampleRate returns the sample rate of the
@@ -51,19 +51,20 @@ func (audio *AudioStream) FrameSize() int {
 // audio frames and samples from it.
 func (audio *AudioStream) Open() error {
 	err := audio.open()
-
 	if err != nil {
 		return err
 	}
 
-	var outputLayout, inputLayout C.AVChannelLayout
+	var outputLayout C.AVChannelLayout
+	// var inputLayout C.AVChannelLayout
 	C.av_channel_layout_from_string(&outputLayout, C.CString("stereo"))
-	C.av_channel_layout_from_mask(&inputLayout, audio.codecCtx.channel_layout)
+	// C.av_channel_layout_from_mask(&inputLayout, audio.codecCtx.channel_layout)
 	C.swr_alloc_set_opts2(&audio.swrCtx,
 		&outputLayout,
 		C.AV_SAMPLE_FMT_DBL,
 		audio.codecCtx.sample_rate,
-		&inputLayout,
+		//&inputLayout,
+		&audio.codecCtx.ch_layout,
 		audio.codecCtx.sample_fmt,
 		audio.codecCtx.sample_rate,
 		0,
@@ -94,7 +95,6 @@ func (audio *AudioStream) ReadFrame() (Frame, bool, error) {
 // ReadAudioFrame reads a new audio frame from the stream.
 func (audio *AudioStream) ReadAudioFrame() (*AudioFrame, bool, error) {
 	ok, err := audio.read()
-
 	if err != nil {
 		return nil, false, err
 	}
@@ -147,8 +147,7 @@ func (audio *AudioStream) ReadAudioFrame() (*AudioFrame, bool, error) {
 		audio.buffer), maxBufferSize)
 	frame := newAudioFrame(audio,
 		int64(audio.frame.pts),
-		int(audio.frame.coded_picture_number),
-		int(audio.frame.display_picture_number), data)
+		data)
 
 	return frame, true, nil
 }
@@ -157,7 +156,6 @@ func (audio *AudioStream) ReadAudioFrame() (*AudioFrame, bool, error) {
 // stops decoding audio frames.
 func (audio *AudioStream) Close() error {
 	err := audio.close()
-
 	if err != nil {
 		return err
 	}
