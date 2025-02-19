@@ -1,6 +1,6 @@
 module github.com/zimwip/reisen
 
-go 1.17
+go 1.24
 
 require (
 	github.com/faiface/beep v1.0.2
