@@ -1,19 +1,20 @@
 module github.com/zimwip/reisen
 
-go 1.24
+go 1.24.0
 
 require (
-	github.com/faiface/beep v1.0.2
+	github.com/faiface/beep v1.1.0
 	github.com/hajimehoshi/ebiten v1.12.12
 	github.com/silbinarywolf/preferdiscretegpu v1.0.0
 )
 
 require (
-	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20200707082815-5321531c36a2 // indirect
-	github.com/hajimehoshi/oto v0.6.8 // indirect
-	github.com/pkg/errors v0.8.1 // indirect
+	github.com/go-gl/glfw/v3.3/glfw v0.0.0-20240506104042-037f3cc74f2a // indirect
+	github.com/hajimehoshi/oto v1.0.1 // indirect
+	github.com/pkg/errors v0.9.1 // indirect
 	golang.org/x/exp v0.0.0-20190731235908-ec7cb31e5a56 // indirect
-	golang.org/x/image v0.0.0-20200801110659-972c09e46d76 // indirect
-	golang.org/x/mobile v0.0.0-20210208171126-f462b3930c8f // indirect
-	golang.org/x/sys v0.0.0-20200918174421-af09f7315aff // indirect
+	golang.org/x/exp/shiny v0.0.0-20250218142911-aa4b98e5adaa // indirect
+	golang.org/x/image v0.24.0 // indirect
+	golang.org/x/mobile v0.0.0-20250218173827-cd096645fcd3 // indirect
+	golang.org/x/sys v0.30.0 // indirect
 )
