@@ -3,6 +3,7 @@ package reisen
 // #cgo pkg-config: libavformat libavcodec libavutil libswscale libwebp
 // #include <libavcodec/avcodec.h>
 // #include <libavformat/avformat.h>
+// #include <libavformat/avio.h>
 // #include <libavutil/avconfig.h>
 // #include <libswscale/swscale.h>
 // #include <libavcodec/bsf.h>
@@ -18,6 +19,7 @@ import (
 // audio, video and other types of streams.
 type Media struct {
 	ctx     *C.AVFormatContext
+	ioctx   *C.AVIOContext
 	packet  *C.AVPacket
 	streams []Stream
 }
@@ -249,6 +251,7 @@ func (media *Media) Close() {
 
 // NewMedia returns a new media container analyzer
 // for the specified media file.
+// https://ffmpeg.org/doxygen/trunk/doc_2examples_2avio_reading_8c-example.html
 func NewMedia(filename string) (*Media, error) {
 	media := &Media{
 		ctx: C.avformat_alloc_context(),
