@@ -18,10 +18,12 @@ import (
 // Media is a media file containing
 // audio, video and other types of streams.
 type Media struct {
-	ctx     *C.AVFormatContext
-	ioctx   *C.AVIOContext
-	packet  *C.AVPacket
-	streams []Stream
+	ctx      *C.AVFormatContext
+	ioctx    *C.AVIOContext
+	ioBuffer unsafe.Pointer // for custom AVIO context cleanup
+	readerID uintptr        // registry key for custom reader (0 if file-based)
+	packet   *C.AVPacket
+	streams  []Stream
 }
 
 // StreamCount returns the number of streams.
@@ -245,6 +247,27 @@ func (media *Media) CloseDecode() error {
 // Close closes the media container.
 func (media *Media) Close() {
 	C.avformat_close_input(&media.ctx)
+
+	// Clean up custom AVIO context if present
+	// Note: avio_context_free does NOT free the buffer, we must do it
+	// But avformat_close_input may have already freed it depending on
+	// how the format context was opened. For custom AVIO, we allocated
+	// the buffer ourselves, but FFmpeg may reassign ctx->buffer internally.
+	if media.ioctx != nil {
+		// Free the buffer that FFmpeg may have reallocated
+		if media.ioctx.buffer != nil {
+			C.av_free(unsafe.Pointer(media.ioctx.buffer))
+		}
+		C.avio_context_free(&media.ioctx)
+		media.ioctx = nil
+	}
+	media.ioBuffer = nil // Don't double-free; handled above
+
+	if media.readerID != 0 {
+		unregisterReader(media.readerID)
+		media.readerID = 0
+	}
+
 	C.avformat_free_context(media.ctx)
 	media.ctx = nil
 }
