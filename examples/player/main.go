@@ -5,6 +5,8 @@ import (
 	"encoding/binary"
 	"fmt"
 	"image"
+	"io"
+	"os"
 	"time"
 
 	"github.com/faiface/beep"
@@ -15,15 +17,30 @@ import (
 )
 
 const (
-	width                             = 1280
-	height                            = 720
 	frameBufferSize                   = 1024
 	sampleRate                        = 44100
 	channelCount                      = 2
 	bitDepth                          = 8
 	sampleBufferSize                  = 32 * channelCount * bitDepth * 1024
 	SpeakerSampleRate beep.SampleRate = 44100
+	maxReadSize                       = 4096
 )
+
+// limitedReader wraps an io.ReadSeeker and limits each read to maxReadSize bytes.
+type limitedReader struct {
+	r io.ReadSeeker
+}
+
+func (l *limitedReader) Read(p []byte) (int, error) {
+	if len(p) > maxReadSize {
+		p = p[:maxReadSize]
+	}
+	return l.r.Read(p)
+}
+
+func (l *limitedReader) Seek(offset int64, whence int) (int64, error) {
+	return l.r.Seek(offset, whence)
+}
 
 // readVideoAndAudio reads video and audio frames
 // from the opened media and sends the decoded
@@ -208,6 +225,9 @@ type Game struct {
 	perSecond              <-chan time.Time
 	last                   time.Time
 	deltaTime              float64
+	file                   *os.File
+	width                  int
+	height                 int
 }
 
 // Strarts reading samples and frames
@@ -221,24 +241,35 @@ func (game *Game) Start(fname string) error {
 		return err
 	}
 
+	// Open the media file.
+	game.file, err = os.Open(fname)
+
+	if err != nil {
+		return err
+	}
+
+	media, err := reisen.NewMediaFromReader(&limitedReader{r: game.file})
+
+	if err != nil {
+		game.file.Close()
+		return err
+	}
+
+	// Get video stream info.
+	videoStream := media.VideoStreams()[0]
+	game.width = videoStream.Width()
+	game.height = videoStream.Height()
+
 	// Sprite for drawing video frames.
 	game.videoSprite, err = ebiten.NewImage(
-		width, height, ebiten.FilterDefault)
+		game.width, game.height, ebiten.FilterDefault)
 
 	if err != nil {
 		return err
 	}
 
-	// Open the media file.
-	media, err := reisen.NewMedia(fname)
-
-	if err != nil {
-		return err
-	}
-
-	// Get the FPS for playing
-	// video frames.
-	videoFPS, _ := media.Streams()[0].FrameRate()
+	// Get the FPS for playing video frames.
+	videoFPS, _ := videoStream.FrameRate()
 
 	if err != nil {
 		return err
@@ -333,15 +364,20 @@ func (game *Game) Update(screen *ebiten.Image) error {
 }
 
 func (game *Game) Layout(a, b int) (int, int) {
-	return width, height
+	return game.width, game.height
 }
 
 func main() {
+	filename := "demo.mp4"
+	if len(os.Args) > 1 {
+		filename = os.Args[1]
+	}
+
 	game := &Game{}
-	err := game.Start("demo.mp4")
+	err := game.Start(filename)
 	handleError(err)
 
-	ebiten.SetWindowSize(width, height)
+	ebiten.SetWindowSize(game.width, game.height)
 	ebiten.SetWindowTitle("Video")
 	err = ebiten.RunGame(game)
 	handleError(err)
