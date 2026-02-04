@@ -38,7 +38,7 @@ type ErrorCallback func(err error, frameNum int64) bool
 // Transcoder configures and runs a transcode job
 type Transcoder struct {
 	// Config fields
-	input           *Media
+	input           io.ReadSeeker
 	output          io.WriteSeeker
 	videoCodec      string
 	audioCodec      string
@@ -53,6 +53,7 @@ type Transcoder struct {
 	onError    ErrorCallback
 
 	// Runtime fields (allocated during Run)
+	media       *Media // created from input ReadSeeker
 	outputCtx   *C.AVFormatContext
 	outputIO    *C.AVIOContext
 	outputIOBuf unsafe.Pointer
@@ -64,8 +65,8 @@ type Transcoder struct {
 	audioFilterCtx *filterContext
 }
 
-// NewTranscoder creates a new transcoder from input Media to output writer
-func NewTranscoder(input *Media, output io.WriteSeeker) *Transcoder {
+// NewTranscoder creates a new transcoder from input ReadSeeker to output WriteSeeker
+func NewTranscoder(input io.ReadSeeker, output io.WriteSeeker) *Transcoder {
 	return &Transcoder{
 		input:      input,
 		output:     output,
@@ -154,10 +155,23 @@ func (t *Transcoder) OnError(fn ErrorCallback) *Transcoder {
 // Run executes the transcoding operation
 func (t *Transcoder) Run(ctx context.Context) error {
 	if t.input == nil {
-		return fmt.Errorf("input media is nil")
+		return fmt.Errorf("input reader is nil")
 	}
 	if t.output == nil {
 		return fmt.Errorf("output writer is nil")
+	}
+
+	// Create Media from input ReadSeeker
+	var err error
+	t.media, err = NewMediaFromReader(t.input)
+	if err != nil {
+		return fmt.Errorf("create media from reader: %w", err)
+	}
+
+	// Open for decoding
+	if err := t.media.OpenDecode(); err != nil {
+		t.cleanup()
+		return fmt.Errorf("open decode: %w", err)
 	}
 
 	// Setup output format context
@@ -183,7 +197,7 @@ func (t *Transcoder) Run(ctx context.Context) error {
 
 	// Seek to start position if requested
 	if t.startAt > 0 {
-		videoStreams := t.input.VideoStreams()
+		videoStreams := t.media.VideoStreams()
 		if len(videoStreams) > 0 {
 			if err := videoStreams[0].Rewind(t.startAt); err != nil {
 				return fmt.Errorf("seek: %w", err)
@@ -205,7 +219,7 @@ func (t *Transcoder) Run(ctx context.Context) error {
 		}
 
 		// Read packet from input
-		packet, gotPacket, err := t.input.ReadPacket()
+		packet, gotPacket, err := t.media.ReadPacket()
 		if err != nil {
 			if t.onError != nil && !t.onError(err, frameCount) {
 				C.av_write_trailer(t.outputCtx)
@@ -241,7 +255,7 @@ func (t *Transcoder) Run(ctx context.Context) error {
 
 		// Progress callback
 		if t.onProgress != nil && frameCount%30 == 0 {
-			totalDur, _ := t.input.Duration()
+			totalDur, _ := t.media.Duration()
 			progress := float64(frameCount) / float64(totalDur.Seconds()*30)
 			if progress > 1.0 {
 				progress = 1.0
@@ -266,7 +280,7 @@ func (t *Transcoder) Run(ctx context.Context) error {
 func (t *Transcoder) setupEncoders() error {
 	// Setup video encoder if requested
 	if t.videoCodec != "" && t.videoCodec != "copy" {
-		videoStreams := t.input.VideoStreams()
+		videoStreams := t.media.VideoStreams()
 		if len(videoStreams) == 0 {
 			return fmt.Errorf("no video stream in input")
 		}
@@ -392,6 +406,13 @@ func (t *Transcoder) cleanup() {
 	if t.writerID != 0 {
 		unregisterWriter(t.writerID)
 		t.writerID = 0
+	}
+
+	// Close media (created from input ReadSeeker)
+	if t.media != nil {
+		t.media.CloseDecode()
+		t.media.Close()
+		t.media = nil
 	}
 }
 

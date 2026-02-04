@@ -117,36 +117,19 @@ func TestTranscoderIntegration(t *testing.T) {
 		t.Skip("test file not found")
 	}
 
-	// Open input
-	media, err := NewMedia(filePath)
+	// Open input as ReadSeeker
+	inputFile, err := os.Open(filePath)
 	if err != nil {
-		t.Fatalf("NewMedia failed: %v", err)
+		t.Fatalf("failed to open file: %v", err)
 	}
-	defer media.Close()
-
-	err = media.OpenDecode()
-	if err != nil {
-		t.Fatalf("OpenDecode failed: %v", err)
-	}
-	defer media.CloseDecode()
-
-	// Open video stream for decoding
-	if len(media.VideoStreams()) == 0 {
-		t.Fatal("no video streams")
-	}
-	videoStream := media.VideoStreams()[0]
-	err = videoStream.Open()
-	if err != nil {
-		t.Fatalf("failed to open video stream: %v", err)
-	}
-	defer videoStream.Close()
+	defer inputFile.Close()
 
 	// Create output buffer
 	var output bytes.Buffer
 	ws := &bufferWriteSeeker{buf: &output}
 
-	// Create transcoder
-	tr := NewTranscoder(media, ws).
+	// Create transcoder - now accepts io.ReadSeeker directly
+	tr := NewTranscoder(inputFile, ws).
 		VideoCodec("libx264").
 		VideoFilter("scale=320:-2").
 		NoAudio().
@@ -174,29 +157,18 @@ func TestTranscoderWithProgressCallback(t *testing.T) {
 		t.Skip("test file not found")
 	}
 
-	media, err := NewMedia(filePath)
+	// Open input as ReadSeeker
+	inputFile, err := os.Open(filePath)
 	if err != nil {
-		t.Fatalf("NewMedia failed: %v", err)
+		t.Fatalf("failed to open file: %v", err)
 	}
-	defer media.Close()
-
-	err = media.OpenDecode()
-	if err != nil {
-		t.Fatalf("OpenDecode failed: %v", err)
-	}
-	defer media.CloseDecode()
-
-	if len(media.VideoStreams()) > 0 {
-		videoStream := media.VideoStreams()[0]
-		videoStream.Open()
-		defer videoStream.Close()
-	}
+	defer inputFile.Close()
 
 	var output bytes.Buffer
 	ws := &bufferWriteSeeker{buf: &output}
 
 	var progressCalls int
-	tr := NewTranscoder(media, ws).
+	tr := NewTranscoder(inputFile, ws).
 		VideoCodec("libx264").
 		NoAudio().
 		Format("mp4").
