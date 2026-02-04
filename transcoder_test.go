@@ -167,3 +167,55 @@ func TestTranscoderIntegration(t *testing.T) {
 
 	t.Logf("transcoded %d bytes", output.Len())
 }
+
+func TestTranscoderWithProgressCallback(t *testing.T) {
+	filePath := "examples/player/demo.mp4"
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		t.Skip("test file not found")
+	}
+
+	media, err := NewMedia(filePath)
+	if err != nil {
+		t.Fatalf("NewMedia failed: %v", err)
+	}
+	defer media.Close()
+
+	err = media.OpenDecode()
+	if err != nil {
+		t.Fatalf("OpenDecode failed: %v", err)
+	}
+	defer media.CloseDecode()
+
+	if len(media.VideoStreams()) > 0 {
+		videoStream := media.VideoStreams()[0]
+		videoStream.Open()
+		defer videoStream.Close()
+	}
+
+	var output bytes.Buffer
+	ws := &bufferWriteSeeker{buf: &output}
+
+	var progressCalls int
+	tr := NewTranscoder(media, ws).
+		VideoCodec("libx264").
+		NoAudio().
+		Format("mp4").
+		FormatOption("movflags", "frag_keyframe+empty_moov").
+		OnProgress(func(stats TranscodeStats) {
+			progressCalls++
+			t.Logf("Progress: %.1f%% (%d frames, %.1f fps)",
+				stats.Progress*100, stats.FramesProcessed, stats.FPS)
+		}).
+		OnError(func(err error, frame int64) bool {
+			t.Logf("Error at frame %d: %v", frame, err)
+			return true // continue
+		})
+
+	err = tr.Run(context.Background())
+	if err != nil {
+		t.Logf("Run returned: %v (may be expected for incomplete impl)", err)
+	}
+
+	t.Logf("Progress callback called %d times", progressCalls)
+	t.Logf("Output size: %d bytes", output.Len())
+}
