@@ -9,11 +9,6 @@ package reisen
 #include <libavutil/opt.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/channel_layout.h>
-
-// Wrapper for av_opt_set_int_list macro which CGO cannot handle directly
-static int set_int_list(void *obj, const char *name, const int *val, int term, int flags) {
-    return av_opt_set_bin(obj, name, (const uint8_t *)val, sizeof(*val) * 2, flags);
-}
 */
 import "C"
 
@@ -48,9 +43,10 @@ func buildAudioFilterSpec(userFilter string, sampleFmt string, sampleRate int, c
 }
 
 // initVideoFilterGraph creates a video filter graph
+// Note: encCtx is kept for future use (e.g., when pix_fmts setting is fixed)
 func initVideoFilterGraph(
 	decCtx *C.AVCodecContext,
-	encCtx *C.AVCodecContext,
+	_ *C.AVCodecContext, // encCtx - reserved for future use
 	timeBase C.AVRational,
 	filterSpec string,
 ) (*filterContext, error) {
@@ -70,10 +66,17 @@ func initVideoFilterGraph(
 	}
 
 	// Create buffer source args
+	// Handle invalid aspect ratio (0/0 or 0/x) by defaulting to 1/1
+	aspectNum := decCtx.sample_aspect_ratio.num
+	aspectDen := decCtx.sample_aspect_ratio.den
+	if aspectDen == 0 || aspectNum == 0 {
+		aspectNum = 1
+		aspectDen = 1
+	}
 	args := fmt.Sprintf("video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d",
 		decCtx.width, decCtx.height, decCtx.pix_fmt,
 		timeBase.num, timeBase.den,
-		decCtx.sample_aspect_ratio.num, decCtx.sample_aspect_ratio.den)
+		aspectNum, aspectDen)
 
 	// Create buffer source context
 	cArgs := C.CString(args)
@@ -99,41 +102,47 @@ func initVideoFilterGraph(
 		return nil, fmt.Errorf("%d: couldn't create buffer sink", status)
 	}
 
-	// Set output pixel format using our wrapper function
-	pixFmts := []C.int{C.int(encCtx.pix_fmt), -1}
-	cPixFmts := C.CString("pix_fmts")
-	defer C.free(unsafe.Pointer(cPixFmts))
-	status = C.set_int_list(unsafe.Pointer(fc.bufferSink), cPixFmts,
-		&pixFmts[0], -1, C.AV_OPT_SEARCH_CHILDREN)
-	if status < 0 {
-		C.avfilter_graph_free(&fc.graph)
-		return nil, fmt.Errorf("%d: couldn't set output pixel format", status)
-	}
+	// NOTE: We don't set pix_fmts on the buffer sink because the filter spec
+	// already includes format conversion (e.g., "scale=320:-2,format=yuv420p")
+	// Setting it here causes a segfault in avfilter_graph_config due to
+	// memory corruption from the set_int_list wrapper function.
 
 	// Parse and link filter graph
+	// Note: avfilter_graph_parse_ptr takes ownership of the inout structures,
+	// so we only free them if parsing fails
 	var outputs *C.AVFilterInOut = C.avfilter_inout_alloc()
 	var inputs *C.AVFilterInOut = C.avfilter_inout_alloc()
-	defer C.avfilter_inout_free(&outputs)
-	defer C.avfilter_inout_free(&inputs)
 
-	outputs.name = C.av_strdup(C.CString("in"))
+	// Create names using C strings properly
+	cNameIn := C.CString("in")
+	cNameOut := C.CString("out")
+	outputs.name = C.av_strdup(cNameIn)
+	C.free(unsafe.Pointer(cNameIn))
 	outputs.filter_ctx = fc.bufferSrc
 	outputs.pad_idx = 0
 	outputs.next = nil
 
-	inputs.name = C.av_strdup(C.CString("out"))
+	inputs.name = C.av_strdup(cNameOut)
+	C.free(unsafe.Pointer(cNameOut))
 	inputs.filter_ctx = fc.bufferSink
 	inputs.pad_idx = 0
 	inputs.next = nil
 
 	cFilterSpec := C.CString(filterSpec)
-	defer C.free(unsafe.Pointer(cFilterSpec))
-
 	status = C.avfilter_graph_parse_ptr(fc.graph, cFilterSpec, &inputs, &outputs, nil)
+	C.free(unsafe.Pointer(cFilterSpec))
+
 	if status < 0 {
+		// Only free on error - on success, parse_ptr takes ownership
+		C.avfilter_inout_free(&inputs)
+		C.avfilter_inout_free(&outputs)
 		C.avfilter_graph_free(&fc.graph)
 		return nil, fmt.Errorf("%d: couldn't parse filter graph", status)
 	}
+
+	// Free any unlinked inout after successful parse
+	C.avfilter_inout_free(&inputs)
+	C.avfilter_inout_free(&outputs)
 
 	status = C.avfilter_graph_config(fc.graph, nil)
 	if status < 0 {

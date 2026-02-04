@@ -157,3 +157,15 @@ func (video *VideoStream) Close() error {
 
 	return nil
 }
+
+// DecoderContext returns the underlying decoder context for use in transcoding.
+// This is for internal use by the Transcoder.
+func (video *VideoStream) DecoderContext() *C.AVCodecContext {
+	return video.codecCtx
+}
+
+// RawFrame returns the underlying AVFrame after decoding.
+// This is for internal use by the Transcoder.
+func (video *VideoStream) RawFrame() *C.AVFrame {
+	return video.frame
+}

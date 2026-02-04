@@ -4,10 +4,13 @@ package reisen
 #cgo pkg-config: libavformat libavcodec libavutil libavfilter
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
+#include <libavcodec/packet.h>
 #include <libavfilter/avfilter.h>
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
 #include <libavutil/opt.h>
+#include <libavutil/frame.h>
+#include <libavutil/avutil.h>
 */
 import "C"
 
@@ -174,14 +177,25 @@ func (t *Transcoder) Run(ctx context.Context) error {
 		return fmt.Errorf("open decode: %w", err)
 	}
 
+	// Open video stream for decoding
+	var videoStream *VideoStream
+	videoStreams := t.media.VideoStreams()
+	if len(videoStreams) > 0 && t.videoCodec != "" {
+		videoStream = videoStreams[0]
+		if err := videoStream.Open(); err != nil {
+			t.cleanup()
+			return fmt.Errorf("open video stream: %w", err)
+		}
+	}
+
 	// Setup output format context
 	if err := t.setupOutput(); err != nil {
 		t.cleanup()
 		return fmt.Errorf("setup output: %w", err)
 	}
 
-	// Setup encoders
-	if err := t.setupEncoders(); err != nil {
+	// Setup encoders (after video stream is open so we have decoder context)
+	if err := t.setupEncoders(videoStream); err != nil {
 		t.cleanup()
 		return fmt.Errorf("setup encoders: %w", err)
 	}
@@ -196,23 +210,43 @@ func (t *Transcoder) Run(ctx context.Context) error {
 	defer t.cleanup()
 
 	// Seek to start position if requested
-	if t.startAt > 0 {
-		videoStreams := t.media.VideoStreams()
-		if len(videoStreams) > 0 {
-			if err := videoStreams[0].Rewind(t.startAt); err != nil {
-				return fmt.Errorf("seek: %w", err)
-			}
+	if t.startAt > 0 && videoStream != nil {
+		if err := videoStream.Rewind(t.startAt); err != nil {
+			return fmt.Errorf("seek: %w", err)
 		}
 	}
 
+	// Allocate encoding packet and filtered frame
+	encPacket := C.av_packet_alloc()
+	if encPacket == nil {
+		return fmt.Errorf("couldn't allocate encoding packet")
+	}
+	defer C.av_packet_free(&encPacket)
+
+	filteredFrame := C.av_frame_alloc()
+	if filteredFrame == nil {
+		return fmt.Errorf("couldn't allocate filtered frame")
+	}
+	defer C.av_frame_free(&filteredFrame)
+
 	// Main transcoding loop
 	var frameCount int64
+	var pts int64
 	startTime := time.Now()
+
+	// Calculate duration limit in PTS units
+	var maxPts int64 = -1
+	if t.duration > 0 && videoStream != nil {
+		tbNum, tbDen := videoStream.TimeBase()
+		factor := float64(tbDen) / float64(tbNum)
+		maxPts = int64(t.duration.Seconds() * factor)
+	}
 
 	for {
 		// Check for cancellation
 		select {
 		case <-ctx.Done():
+			t.flushEncoder(encPacket)
 			C.av_write_trailer(t.outputCtx)
 			return ctx.Err()
 		default:
@@ -222,6 +256,7 @@ func (t *Transcoder) Run(ctx context.Context) error {
 		packet, gotPacket, err := t.media.ReadPacket()
 		if err != nil {
 			if t.onError != nil && !t.onError(err, frameCount) {
+				t.flushEncoder(encPacket)
 				C.av_write_trailer(t.outputCtx)
 				return err
 			}
@@ -231,26 +266,76 @@ func (t *Transcoder) Run(ctx context.Context) error {
 			break // EOF
 		}
 
-		// Check duration limit
-		if t.duration > 0 {
-			elapsed := time.Since(startTime)
-			if elapsed > t.duration {
-				break
-			}
-		}
-
 		// Process based on packet type
 		switch packet.Type() {
 		case StreamVideo:
-			if t.videoEncCtx != nil {
-				// For now, just count frames
-				// Full decode->filter->encode pipeline needs AVFrame access
-				frameCount++
+			if t.videoEncCtx != nil && videoStream != nil {
+				// Decode frame
+				_, gotFrame, err := videoStream.ReadVideoFrame()
+				if err != nil {
+					if t.onError != nil && !t.onError(err, frameCount) {
+						continue
+					}
+				}
+				if !gotFrame {
+					continue
+				}
+
+				rawFrame := videoStream.RawFrame()
+				if rawFrame == nil {
+					continue
+				}
+
+				// Check duration limit by PTS
+				if maxPts > 0 && int64(rawFrame.pts) > maxPts {
+					goto done
+				}
+
+				// Push frame to filter graph
+				if t.videoFilterCtx != nil {
+					status := C.av_buffersrc_add_frame_flags(
+						t.videoFilterCtx.bufferSrc, rawFrame, C.AV_BUFFERSRC_FLAG_KEEP_REF)
+					if status < 0 {
+						continue
+					}
+
+					// Pull filtered frames
+					for {
+						status = C.av_buffersink_get_frame(t.videoFilterCtx.bufferSink, filteredFrame)
+						if status < 0 {
+							break // EAGAIN or error
+						}
+
+						// Encode filtered frame
+						filteredFrame.pict_type = C.AV_PICTURE_TYPE_NONE
+						filteredFrame.pts = C.int64_t(pts)
+						pts++
+
+						if err := t.encodeAndWrite(filteredFrame, encPacket, 0); err != nil {
+							if t.onError != nil && !t.onError(err, frameCount) {
+								C.av_frame_unref(filteredFrame)
+								continue
+							}
+						}
+						frameCount++
+						C.av_frame_unref(filteredFrame)
+					}
+				} else {
+					// No filter - encode directly
+					rawFrame.pict_type = C.AV_PICTURE_TYPE_NONE
+					rawFrame.pts = C.int64_t(pts)
+					pts++
+
+					if err := t.encodeAndWrite(rawFrame, encPacket, 0); err != nil {
+						if t.onError != nil && !t.onError(err, frameCount) {
+							continue
+						}
+					}
+					frameCount++
+				}
 			}
 		case StreamAudio:
-			if t.audioEncCtx != nil {
-				// Audio processing - skip for now
-			}
+			// Audio processing - skip for now (NoAudio is common use case)
 		}
 
 		// Progress callback
@@ -270,34 +355,107 @@ func (t *Transcoder) Run(ctx context.Context) error {
 		}
 	}
 
+done:
+	// Flush encoder
+	t.flushEncoder(encPacket)
+
 	// Write trailer
 	C.av_write_trailer(t.outputCtx)
 
 	return nil
 }
 
-// setupEncoders creates video and audio encoder contexts
-func (t *Transcoder) setupEncoders() error {
-	// Setup video encoder if requested
-	if t.videoCodec != "" && t.videoCodec != "copy" {
-		videoStreams := t.media.VideoStreams()
-		if len(videoStreams) == 0 {
-			return fmt.Errorf("no video stream in input")
-		}
-		inVideo := videoStreams[0]
+// encodeAndWrite encodes a frame and writes it to the output
+func (t *Transcoder) encodeAndWrite(frame *C.AVFrame, packet *C.AVPacket, streamIndex int) error {
+	status := C.avcodec_send_frame(t.videoEncCtx, frame)
+	if status < 0 {
+		return fmt.Errorf("%d: couldn't send frame to encoder", status)
+	}
 
+	for {
+		status = C.avcodec_receive_packet(t.videoEncCtx, packet)
+		if status == C.int(ErrorAgain) || status == C.int(ErrorEndOfFile) {
+			return nil
+		}
+		if status < 0 {
+			return fmt.Errorf("%d: couldn't receive packet from encoder", status)
+		}
+
+		packet.stream_index = C.int(streamIndex)
+
+		// Rescale timestamps
+		outStream := t.outputCtx.streams
+		C.av_packet_rescale_ts(packet, t.videoEncCtx.time_base, (*outStream).time_base)
+
+		status = C.av_interleaved_write_frame(t.outputCtx, packet)
+		C.av_packet_unref(packet)
+		if status < 0 {
+			return fmt.Errorf("%d: couldn't write packet", status)
+		}
+	}
+}
+
+// flushEncoder flushes remaining frames from the encoder
+func (t *Transcoder) flushEncoder(packet *C.AVPacket) {
+	if t.videoEncCtx == nil {
+		return
+	}
+
+	// Send NULL to flush
+	C.avcodec_send_frame(t.videoEncCtx, nil)
+
+	for {
+		status := C.avcodec_receive_packet(t.videoEncCtx, packet)
+		if status < 0 {
+			break
+		}
+
+		packet.stream_index = 0
+		outStream := t.outputCtx.streams
+		C.av_packet_rescale_ts(packet, t.videoEncCtx.time_base, (*outStream).time_base)
+		C.av_interleaved_write_frame(t.outputCtx, packet)
+		C.av_packet_unref(packet)
+	}
+}
+
+// setupEncoders creates video and audio encoder contexts
+func (t *Transcoder) setupEncoders(videoStream *VideoStream) error {
+	// Setup video encoder if requested
+	if t.videoCodec != "" && t.videoCodec != "copy" && videoStream != nil {
 		codec, err := findEncoder(t.videoCodec)
 		if err != nil {
 			return err
 		}
 
-		// Determine output dimensions (may be modified by filter)
-		width := inVideo.Width()
-		height := inVideo.Height()
+		// Get decoder context
+		decCtx := videoStream.DecoderContext()
+		if decCtx == nil {
+			return fmt.Errorf("video stream not opened for decoding")
+		}
 
-		// Get time base from input stream
-		tbNum, tbDen := inVideo.TimeBase()
-		timeBase := C.AVRational{num: C.int(tbNum), den: C.int(tbDen)}
+		// Determine output dimensions - may be modified by filter
+		width := videoStream.Width()
+		height := videoStream.Height()
+
+		// Parse filter to detect scale changes
+		if t.videoFilterSpec != "" {
+			// Try to detect scale filter dimensions
+			var scaleW, scaleH int
+			if n, _ := fmt.Sscanf(t.videoFilterSpec, "scale=%d:%d", &scaleW, &scaleH); n >= 1 {
+				width = scaleW
+				if scaleH > 0 {
+					height = scaleH
+				} else if scaleH == -2 {
+					// Maintain aspect ratio, round to nearest even number
+					aspectRatio := float64(videoStream.Width()) / float64(videoStream.Height())
+					height = (int(float64(width)/aspectRatio) + 1) / 2 * 2
+				}
+			}
+		}
+
+		// Get frame rate for time base
+		frNum, frDen := videoStream.FrameRate()
+		timeBase := C.AVRational{num: C.int(frDen), den: C.int(frNum)}
 
 		t.videoEncCtx, err = createVideoEncoder(
 			codec,
@@ -308,6 +466,20 @@ func (t *Transcoder) setupEncoders() error {
 		)
 		if err != nil {
 			return fmt.Errorf("create video encoder: %w", err)
+		}
+
+		// Setup filter graph if filter specified
+		if t.videoFilterSpec != "" {
+			// Build filter spec with output format conversion
+			filterSpec := buildFilterSpec(t.videoFilterSpec, "yuv420p")
+
+			tbNum, tbDen := videoStream.TimeBase()
+			inputTimeBase := C.AVRational{num: C.int(tbNum), den: C.int(tbDen)}
+
+			t.videoFilterCtx, err = initVideoFilterGraph(decCtx, t.videoEncCtx, inputTimeBase, filterSpec)
+			if err != nil {
+				return fmt.Errorf("init video filter: %w", err)
+			}
 		}
 
 		// Add video stream to output
