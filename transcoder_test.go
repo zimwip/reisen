@@ -2,6 +2,7 @@ package reisen
 
 import (
 	"bytes"
+	"context"
 	"testing"
 	"time"
 )
@@ -41,8 +42,8 @@ func TestTranscoderBuilder(t *testing.T) {
 	if tr.videoCodec != "libx264" {
 		t.Errorf("expected libx264, got %s", tr.videoCodec)
 	}
-	if tr.videoFilter != "scale=1280:-2" {
-		t.Errorf("expected scale filter, got %s", tr.videoFilter)
+	if tr.videoFilterSpec != "scale=1280:-2" {
+		t.Errorf("expected scale filter, got %s", tr.videoFilterSpec)
 	}
 	if tr.audioCodec != "aac" {
 		t.Errorf("expected aac, got %s", tr.audioCodec)
@@ -91,5 +92,19 @@ func TestTranscoderAudioPassthrough(t *testing.T) {
 
 	if tr.audioCodec != "copy" {
 		t.Errorf("expected 'copy' for passthrough, got %s", tr.audioCodec)
+	}
+}
+
+func TestTranscoderRunWithNilInput(t *testing.T) {
+	var output bytes.Buffer
+	ws := &bufferWriteSeeker{buf: &output}
+
+	tr := NewTranscoder(nil, ws).
+		VideoCodec("libx264").
+		Format("mp4")
+
+	err := tr.Run(context.Background())
+	if err == nil {
+		t.Error("expected error with nil input")
 	}
 }
