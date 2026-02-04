@@ -394,3 +394,26 @@ func (t *Transcoder) cleanup() {
 		t.writerID = 0
 	}
 }
+
+// processVideoFrame decodes, filters, encodes and writes a video frame
+// NOTE: This is a placeholder. Full implementation requires AVFrame access from VideoStream.
+func (t *Transcoder) processVideoFrame(videoStream *VideoStream) error {
+	// Read decoded frame
+	frame, gotFrame, err := videoStream.ReadVideoFrame()
+	if err != nil {
+		return err
+	}
+	if !gotFrame || frame == nil {
+		return nil // EAGAIN
+	}
+
+	// For now, skip actual encoding (would need AVFrame access)
+	// Full implementation would:
+	// 1. Get raw AVFrame from decoder
+	// 2. Push through filter graph
+	// 3. Pull filtered frame
+	// 4. Encode
+	// 5. Write packet to muxer
+
+	return nil
+}
