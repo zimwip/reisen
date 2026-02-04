@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"flag"
 	"fmt"
 	"image"
+	"image/color"
+	"image/draw"
 	"io"
 	"os"
 	"time"
@@ -14,6 +17,9 @@ import (
 	"github.com/hajimehoshi/ebiten"
 	_ "github.com/silbinarywolf/preferdiscretegpu"
 	"github.com/zimwip/reisen"
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
+	"golang.org/x/image/math/fixed"
 )
 
 const (
@@ -25,6 +31,79 @@ const (
 	SpeakerSampleRate beep.SampleRate = 44100
 	maxReadSize                       = 4096
 )
+
+// Command-line flags
+var convertFlag = flag.Bool("convert", false, "Enable on-the-fly conversion (80% scale + text overlay)")
+var overlayText = flag.String("text", "Reisen Player", "Text overlay to display when -convert is enabled")
+
+// scaleImage scales an RGBA image by the given factor using nearest-neighbor
+func scaleImage(src *image.RGBA, scale float64) *image.RGBA {
+	srcBounds := src.Bounds()
+	srcW := srcBounds.Dx()
+	srcH := srcBounds.Dy()
+
+	dstW := int(float64(srcW) * scale)
+	dstH := int(float64(srcH) * scale)
+
+	dst := image.NewRGBA(image.Rect(0, 0, dstW, dstH))
+
+	for y := 0; y < dstH; y++ {
+		for x := 0; x < dstW; x++ {
+			srcX := int(float64(x) / scale)
+			srcY := int(float64(y) / scale)
+			if srcX >= srcW {
+				srcX = srcW - 1
+			}
+			if srcY >= srcH {
+				srcY = srcH - 1
+			}
+			dst.Set(x, y, src.At(srcX, srcY))
+		}
+	}
+
+	return dst
+}
+
+// drawTextOverlay draws text on an RGBA image with a semi-transparent background
+func drawTextOverlay(img *image.RGBA, text string) {
+	// Draw semi-transparent background for text
+	bounds := img.Bounds()
+	bgHeight := 30
+	bgRect := image.Rect(0, bounds.Max.Y-bgHeight, bounds.Max.X, bounds.Max.Y)
+	bgColor := color.RGBA{0, 0, 0, 180} // semi-transparent black
+
+	draw.Draw(img, bgRect, &image.Uniform{bgColor}, image.Point{}, draw.Over)
+
+	// Draw text
+	textColor := color.RGBA{255, 255, 255, 255} // white
+	point := fixed.Point26_6{
+		X: fixed.I(10),
+		Y: fixed.I(bounds.Max.Y - 10),
+	}
+
+	d := &font.Drawer{
+		Dst:  img,
+		Src:  image.NewUniform(textColor),
+		Face: basicfont.Face7x13,
+		Dot:  point,
+	}
+	d.DrawString(text)
+}
+
+// processFrame applies transformations to a frame if convert mode is enabled
+func processFrame(frame *image.RGBA, convert bool, text string) *image.RGBA {
+	if !convert {
+		return frame
+	}
+
+	// Scale down by 20% (keep 80%)
+	scaled := scaleImage(frame, 0.8)
+
+	// Add text overlay
+	drawTextOverlay(scaled, text)
+
+	return scaled
+}
 
 // limitedReader wraps an io.ReadSeeker and limits each read to maxReadSize bytes.
 type limitedReader struct {
@@ -44,8 +123,9 @@ func (l *limitedReader) Seek(offset int64, whence int) (int64, error) {
 
 // readVideoAndAudio reads video and audio frames
 // from the opened media and sends the decoded
-// data to che channels to be played.
-func readVideoAndAudio(media *reisen.Media) (<-chan *image.RGBA, <-chan [2]float64, chan error, error) {
+// data to the channels to be played.
+// If convert is true, frames are scaled to 80% and have text overlay applied.
+func readVideoAndAudio(media *reisen.Media, convert bool, text string) (<-chan *image.RGBA, <-chan [2]float64, chan error, error) {
 	frameBuffer := make(chan *image.RGBA,
 		frameBufferSize)
 	sampleBuffer := make(chan [2]float64, sampleBufferSize)
@@ -119,7 +199,9 @@ func readVideoAndAudio(media *reisen.Media) (<-chan *image.RGBA, <-chan [2]float
 					continue
 				}
 
-				frameBuffer <- videoFrame.Image()
+				// Apply transformation if convert mode is enabled
+				frame := processFrame(videoFrame.Image(), convert, text)
+				frameBuffer <- frame
 
 			case reisen.StreamAudio:
 				s := media.Streams()[packet.StreamIndex()].(*reisen.AudioStream)
@@ -228,11 +310,16 @@ type Game struct {
 	file                   *os.File
 	width                  int
 	height                 int
+	convert                bool
+	overlayText            string
 }
 
-// Strarts reading samples and frames
-// of the media file.
-func (game *Game) Start(fname string) error {
+// Start reads samples and frames of the media file.
+// If convert is true, frames are scaled to 80% with text overlay.
+func (game *Game) Start(fname string, convert bool, text string) error {
+	game.convert = convert
+	game.overlayText = text
+
 	// Initialize the audio speaker.
 	err := speaker.Init(sampleRate,
 		SpeakerSampleRate.N(time.Second/10))
@@ -259,6 +346,12 @@ func (game *Game) Start(fname string) error {
 	videoStream := media.VideoStreams()[0]
 	game.width = videoStream.Width()
 	game.height = videoStream.Height()
+
+	// If convert mode, adjust dimensions to 80%
+	if convert {
+		game.width = int(float64(game.width) * 0.8)
+		game.height = int(float64(game.height) * 0.8)
+	}
 
 	// Sprite for drawing video frames.
 	game.videoSprite, err = ebiten.NewImage(
@@ -287,7 +380,7 @@ func (game *Game) Start(fname string) error {
 	// Start decoding streams.
 	var sampleSource <-chan [2]float64
 	game.frameBuffer, sampleSource,
-		game.errs, err = readVideoAndAudio(media)
+		game.errs, err = readVideoAndAudio(media, convert, text)
 
 	if err != nil {
 		return err
@@ -368,17 +461,25 @@ func (game *Game) Layout(a, b int) (int, int) {
 }
 
 func main() {
+	flag.Parse()
+
 	filename := "demo.mp4"
-	if len(os.Args) > 1 {
-		filename = os.Args[1]
+	args := flag.Args()
+	if len(args) > 0 {
+		filename = args[0]
 	}
 
 	game := &Game{}
-	err := game.Start(filename)
+	err := game.Start(filename, *convertFlag, *overlayText)
 	handleError(err)
 
+	title := "Video"
+	if *convertFlag {
+		title = fmt.Sprintf("Video [Converting: 80%% scale + \"%s\"]", *overlayText)
+	}
+
 	ebiten.SetWindowSize(game.width, game.height)
-	ebiten.SetWindowTitle("Video")
+	ebiten.SetWindowTitle(title)
 	err = ebiten.RunGame(game)
 	handleError(err)
 }
