@@ -14,4 +14,10 @@ const (
 	// ErrorEndOfFile is returned upon
 	// reaching the end of the media file.
 	ErrorEndOfFile ErrorType = -541478725
+	// ErrorIO is returned when an I/O
+	// operation fails during transcoding.
+	ErrorIO ErrorType = -5
+	// ErrorEncoder is returned when
+	// encoding fails.
+	ErrorEncoder ErrorType = -1094995529
 )
