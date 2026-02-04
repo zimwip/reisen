@@ -3,6 +3,7 @@ package reisen
 import (
 	"bytes"
 	"context"
+	"os"
 	"testing"
 	"time"
 )
@@ -107,4 +108,62 @@ func TestTranscoderRunWithNilInput(t *testing.T) {
 	if err == nil {
 		t.Error("expected error with nil input")
 	}
+}
+
+func TestTranscoderIntegration(t *testing.T) {
+	// Skip if no test file
+	filePath := "examples/player/demo.mp4"
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		t.Skip("test file not found")
+	}
+
+	// Open input
+	media, err := NewMedia(filePath)
+	if err != nil {
+		t.Fatalf("NewMedia failed: %v", err)
+	}
+	defer media.Close()
+
+	err = media.OpenDecode()
+	if err != nil {
+		t.Fatalf("OpenDecode failed: %v", err)
+	}
+	defer media.CloseDecode()
+
+	// Open video stream for decoding
+	if len(media.VideoStreams()) == 0 {
+		t.Fatal("no video streams")
+	}
+	videoStream := media.VideoStreams()[0]
+	err = videoStream.Open()
+	if err != nil {
+		t.Fatalf("failed to open video stream: %v", err)
+	}
+	defer videoStream.Close()
+
+	// Create output buffer
+	var output bytes.Buffer
+	ws := &bufferWriteSeeker{buf: &output}
+
+	// Create transcoder
+	tr := NewTranscoder(media, ws).
+		VideoCodec("libx264").
+		VideoFilter("scale=320:-2").
+		NoAudio().
+		Format("mp4").
+		FormatOption("movflags", "frag_keyframe+empty_moov").
+		Duration(2 * time.Second)
+
+	// Run transcoding
+	err = tr.Run(context.Background())
+	if err != nil {
+		t.Fatalf("Run failed: %v", err)
+	}
+
+	// Verify output is not empty
+	if output.Len() == 0 {
+		t.Error("expected non-empty output")
+	}
+
+	t.Logf("transcoded %d bytes", output.Len())
 }
