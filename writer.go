@@ -13,9 +13,16 @@ int goWritePacket(void *opaque, uint8_t *buf, int buf_size);
 int64_t goWriteSeek(void *opaque, int64_t offset, int whence);
 
 // C wrapper functions
+// FFmpeg 6.1+ (libavformat >= 61) uses const uint8_t*, older versions use uint8_t*
+#if LIBAVFORMAT_VERSION_MAJOR >= 61
 static int cWritePacket(void *opaque, const uint8_t *buf, int buf_size) {
     return goWritePacket(opaque, (uint8_t*)buf, buf_size);
 }
+#else
+static int cWritePacket(void *opaque, uint8_t *buf, int buf_size) {
+    return goWritePacket(opaque, buf, buf_size);
+}
+#endif
 
 static int64_t cWriteSeek(void *opaque, int64_t offset, int whence) {
     return goWriteSeek(opaque, offset, whence);
