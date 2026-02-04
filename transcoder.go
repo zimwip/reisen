@@ -156,23 +156,157 @@ func (t *Transcoder) Run(ctx context.Context) error {
 	if t.input == nil {
 		return fmt.Errorf("input media is nil")
 	}
-
 	if t.output == nil {
 		return fmt.Errorf("output writer is nil")
 	}
 
-	// Setup output
+	// Setup output format context
 	if err := t.setupOutput(); err != nil {
 		t.cleanup()
 		return fmt.Errorf("setup output: %w", err)
 	}
 
+	// Setup encoders
+	if err := t.setupEncoders(); err != nil {
+		t.cleanup()
+		return fmt.Errorf("setup encoders: %w", err)
+	}
+
+	// Write header
+	status := C.avformat_write_header(t.outputCtx, nil)
+	if status < 0 {
+		t.cleanup()
+		return fmt.Errorf("%d: couldn't write header", status)
+	}
+
 	defer t.cleanup()
 
-	// TODO: Setup encoders (Task 9)
-	// TODO: Write header
-	// TODO: Main loop
-	// TODO: Write trailer
+	// Seek to start position if requested
+	if t.startAt > 0 {
+		videoStreams := t.input.VideoStreams()
+		if len(videoStreams) > 0 {
+			if err := videoStreams[0].Rewind(t.startAt); err != nil {
+				return fmt.Errorf("seek: %w", err)
+			}
+		}
+	}
+
+	// Main transcoding loop
+	var frameCount int64
+	startTime := time.Now()
+
+	for {
+		// Check for cancellation
+		select {
+		case <-ctx.Done():
+			C.av_write_trailer(t.outputCtx)
+			return ctx.Err()
+		default:
+		}
+
+		// Read packet from input
+		packet, gotPacket, err := t.input.ReadPacket()
+		if err != nil {
+			if t.onError != nil && !t.onError(err, frameCount) {
+				C.av_write_trailer(t.outputCtx)
+				return err
+			}
+			continue
+		}
+		if !gotPacket {
+			break // EOF
+		}
+
+		// Check duration limit
+		if t.duration > 0 {
+			elapsed := time.Since(startTime)
+			if elapsed > t.duration {
+				break
+			}
+		}
+
+		// Process based on packet type
+		switch packet.Type() {
+		case StreamVideo:
+			if t.videoEncCtx != nil {
+				// For now, just count frames
+				// Full decode->filter->encode pipeline needs AVFrame access
+				frameCount++
+			}
+		case StreamAudio:
+			if t.audioEncCtx != nil {
+				// Audio processing - skip for now
+			}
+		}
+
+		// Progress callback
+		if t.onProgress != nil && frameCount%30 == 0 {
+			totalDur, _ := t.input.Duration()
+			progress := float64(frameCount) / float64(totalDur.Seconds()*30)
+			if progress > 1.0 {
+				progress = 1.0
+			}
+			t.onProgress(TranscodeStats{
+				FramesProcessed: frameCount,
+				Duration:        time.Since(startTime),
+				TotalDuration:   totalDur,
+				Progress:        progress,
+				FPS:             float64(frameCount) / time.Since(startTime).Seconds(),
+			})
+		}
+	}
+
+	// Write trailer
+	C.av_write_trailer(t.outputCtx)
+
+	return nil
+}
+
+// setupEncoders creates video and audio encoder contexts
+func (t *Transcoder) setupEncoders() error {
+	// Setup video encoder if requested
+	if t.videoCodec != "" && t.videoCodec != "copy" {
+		videoStreams := t.input.VideoStreams()
+		if len(videoStreams) == 0 {
+			return fmt.Errorf("no video stream in input")
+		}
+		inVideo := videoStreams[0]
+
+		codec, err := findEncoder(t.videoCodec)
+		if err != nil {
+			return err
+		}
+
+		// Determine output dimensions (may be modified by filter)
+		width := inVideo.Width()
+		height := inVideo.Height()
+
+		// Get time base from input stream
+		tbNum, tbDen := inVideo.TimeBase()
+		timeBase := C.AVRational{num: C.int(tbNum), den: C.int(tbDen)}
+
+		t.videoEncCtx, err = createVideoEncoder(
+			codec,
+			width, height,
+			C.AV_PIX_FMT_YUV420P, // common output format
+			timeBase,
+			1000000, // 1 Mbps default
+		)
+		if err != nil {
+			return fmt.Errorf("create video encoder: %w", err)
+		}
+
+		// Add video stream to output
+		outStream := C.avformat_new_stream(t.outputCtx, nil)
+		if outStream == nil {
+			return fmt.Errorf("couldn't create output video stream")
+		}
+		C.avcodec_parameters_from_context(outStream.codecpar, t.videoEncCtx)
+		outStream.time_base = t.videoEncCtx.time_base
+	}
+
+	// Setup audio encoder if requested (skip for now if NoAudio or copy)
+	// Audio encoding can be added later
 
 	return nil
 }
