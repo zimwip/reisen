@@ -166,6 +166,11 @@ func (video *VideoStream) Close() error {
 	return nil
 }
 
+// CodecParameters returns the codec parameters for passthrough mode.
+func (video *VideoStream) CodecParameters() *C.AVCodecParameters {
+	return video.codecParams
+}
+
 // DecoderContext returns the underlying decoder context for use in transcoding.
 // This is for internal use by the Transcoder.
 func (video *VideoStream) DecoderContext() *C.AVCodecContext {

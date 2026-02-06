@@ -73,6 +73,7 @@ type Transcoder struct {
 	audioStreamIdx  int // output stream index for audio
 	videoStreamIdx  int // output stream index for video
 	audioPassthrough bool // true if copying audio without re-encoding
+	videoPassthrough bool // true if copying video without re-encoding
 }
 
 // NewTranscoder creates a new transcoder from input ReadSeeker to output WriteSeeker
@@ -111,6 +112,12 @@ func (t *Transcoder) AudioCodec(codec string) *Transcoder {
 // AudioPassthrough copies audio without re-encoding
 func (t *Transcoder) AudioPassthrough() *Transcoder {
 	t.audioCodec = "copy"
+	return t
+}
+
+// VideoPassthrough copies video without re-encoding
+func (t *Transcoder) VideoPassthrough() *Transcoder {
+	t.videoCodec = "copy"
 	return t
 }
 
@@ -188,9 +195,12 @@ func (t *Transcoder) Run(ctx context.Context) error {
 	videoStreams := t.media.VideoStreams()
 	if len(videoStreams) > 0 && t.videoCodec != "" {
 		t.videoStream = videoStreams[0]
-		if err := t.videoStream.Open(); err != nil {
-			t.cleanup()
-			return fmt.Errorf("open video stream: %w", err)
+		// Only open for decoding if we need to re-encode (not passthrough)
+		if t.videoCodec != "copy" {
+			if err := t.videoStream.Open(); err != nil {
+				t.cleanup()
+				return fmt.Errorf("open video stream: %w", err)
+			}
 		}
 	}
 
@@ -289,7 +299,14 @@ func (t *Transcoder) Run(ctx context.Context) error {
 		// Process based on packet type
 		switch packet.Type() {
 		case StreamVideo:
-			if t.videoEncCtx != nil && t.videoStream != nil {
+			if t.videoPassthrough && t.videoStream != nil {
+				// Passthrough mode - copy packet directly
+				if err := t.writeVideoPassthrough(packet); err != nil {
+					if t.onError != nil && !t.onError(err, frameCount) {
+						continue
+					}
+				}
+			} else if t.videoEncCtx != nil && t.videoStream != nil {
 				// Decode frame
 				_, gotFrame, err := t.videoStream.ReadVideoFrame()
 				if err != nil {
@@ -538,10 +555,40 @@ func (t *Transcoder) writeAudioPassthrough(packet *Packet) error {
 	return nil
 }
 
+// writeVideoPassthrough writes a video packet directly without re-encoding
+func (t *Transcoder) writeVideoPassthrough(packet *Packet) error {
+	// Get the raw packet from the input
+	rawPacket := C.av_packet_alloc()
+	if rawPacket == nil {
+		return fmt.Errorf("couldn't allocate packet for passthrough")
+	}
+	defer C.av_packet_free(&rawPacket)
+
+	// Reference the original packet data
+	status := C.av_packet_ref(rawPacket, t.media.packet)
+	if status < 0 {
+		return fmt.Errorf("%d: couldn't reference packet", status)
+	}
+
+	rawPacket.stream_index = C.int(t.videoStreamIdx)
+
+	// Rescale timestamps from input to output
+	inStream := t.videoStream.innerStream()
+	outStreams := unsafe.Slice(t.outputCtx.streams, t.outputCtx.nb_streams)
+	C.av_packet_rescale_ts(rawPacket, inStream.time_base, outStreams[t.videoStreamIdx].time_base)
+
+	status = C.av_interleaved_write_frame(t.outputCtx, rawPacket)
+	if status < 0 {
+		return fmt.Errorf("%d: couldn't write passthrough video packet", status)
+	}
+
+	return nil
+}
+
 // flushEncoder flushes remaining frames from video and audio encoders
 func (t *Transcoder) flushEncoder(packet *C.AVPacket) {
-	// Flush video encoder
-	if t.videoEncCtx != nil {
+	// Flush video encoder (not needed for passthrough)
+	if t.videoEncCtx != nil && !t.videoPassthrough {
 		C.avcodec_send_frame(t.videoEncCtx, nil)
 
 		for {
@@ -580,6 +627,25 @@ func (t *Transcoder) flushEncoder(packet *C.AVPacket) {
 // setupEncoders creates video and audio encoder contexts
 func (t *Transcoder) setupEncoders() error {
 	streamIdx := 0
+
+	// Setup video passthrough if requested
+	if t.videoCodec == "copy" && t.videoStream != nil {
+		t.videoPassthrough = true
+
+		outStream := C.avformat_new_stream(t.outputCtx, nil)
+		if outStream == nil {
+			return fmt.Errorf("couldn't create output video stream")
+		}
+
+		// Copy codec parameters from input stream
+		status := C.avcodec_parameters_copy(outStream.codecpar, t.videoStream.CodecParameters())
+		if status < 0 {
+			return fmt.Errorf("%d: couldn't copy video codec parameters", status)
+		}
+		outStream.time_base = t.videoStream.innerStream().time_base
+		t.videoStreamIdx = streamIdx
+		streamIdx++
+	}
 
 	// Setup video encoder if requested
 	if t.videoCodec != "" && t.videoCodec != "copy" && t.videoStream != nil {
@@ -815,13 +881,12 @@ func (t *Transcoder) cleanup() {
 		t.writerID = 0
 	}
 
-	// Close streams
-	if t.videoStream != nil {
+	// Close streams (only close if we opened for decoding, not passthrough)
+	if t.videoStream != nil && !t.videoPassthrough {
 		t.videoStream.Close()
-		t.videoStream = nil
 	}
+	t.videoStream = nil
 	if t.audioStream != nil && !t.audioPassthrough {
-		// Only close if we opened it for decoding
 		t.audioStream.Close()
 	}
 	t.audioStream = nil
