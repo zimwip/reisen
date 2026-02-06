@@ -74,6 +74,7 @@ type Transcoder struct {
 	videoStreamIdx  int // output stream index for video
 	audioPassthrough bool // true if copying audio without re-encoding
 	videoPassthrough bool // true if copying video without re-encoding
+	needsFaststart   bool // true if we handle moov relocation after writing
 }
 
 // NewTranscoder creates a new transcoder from input ReadSeeker to output WriteSeeker
@@ -462,6 +463,13 @@ done:
 	// Write trailer
 	C.av_write_trailer(t.outputCtx)
 
+	// Faststart: relocate moov atom before mdat
+	if t.needsFaststart {
+		if err := t.doFaststart(); err != nil {
+			return fmt.Errorf("faststart: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -834,6 +842,21 @@ func (t *Transcoder) setupOutput() error {
 	// Attach custom AVIO
 	t.outputCtx.pb = t.outputIO
 	t.outputCtx.flags |= C.AVFMT_FLAG_CUSTOM_IO
+
+	// Handle faststart: strip from movflags and relocate moov ourselves after
+	// writing, because FFmpeg's built-in faststart requires re-opening the
+	// output file by URL, which isn't possible with custom AVIO contexts.
+	if movflags, ok := t.formatOpts["movflags"]; ok {
+		cleaned, hasFaststart := stripFaststart(movflags)
+		if hasFaststart {
+			t.needsFaststart = true
+			if cleaned == "" {
+				delete(t.formatOpts, "movflags")
+			} else {
+				t.formatOpts["movflags"] = cleaned
+			}
+		}
+	}
 
 	// Set format options
 	for key, value := range t.formatOpts {
