@@ -704,9 +704,10 @@ func (t *Transcoder) setupEncoders() error {
 			return fmt.Errorf("create video encoder: %w", err)
 		}
 
-		// Setup filter graph if filter specified
-		if t.videoFilterSpec != "" {
-			// Build filter spec with output format conversion
+		// Always setup filter graph for pixel format conversion (e.g., PAL8/BGRA → YUV420P).
+		// Without this, raw decoded frames (e.g., from GIFs) have stride=0 for YUV planes,
+		// causing "Input picture width is greater than stride" errors.
+		{
 			filterSpec := buildFilterSpec(t.videoFilterSpec, "yuv420p")
 
 			tbNum, tbDen := t.videoStream.TimeBase()
