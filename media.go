@@ -238,7 +238,7 @@ func (media *Media) ReadPacket() (*Packet, bool, error) {
 
 // CloseDecode closes the media container for decoding.
 func (media *Media) CloseDecode() error {
-	C.av_free(unsafe.Pointer(media.packet))
+	C.av_packet_free(&media.packet)
 	media.packet = nil
 
 	return nil

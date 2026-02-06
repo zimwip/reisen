@@ -150,10 +150,18 @@ func (video *VideoStream) Close() error {
 		return err
 	}
 
-	C.av_free(unsafe.Pointer(video.rgbaFrame))
-	video.rgbaFrame = nil
-	C.sws_freeContext(video.swsCtx)
-	video.swsCtx = nil
+	// Free the manually allocated buffer first, then the frame
+	if video.rgbaFrame != nil {
+		if video.rgbaFrame.data[0] != nil {
+			C.av_free(unsafe.Pointer(video.rgbaFrame.data[0]))
+		}
+		C.av_frame_free(&video.rgbaFrame)
+		video.rgbaFrame = nil
+	}
+	if video.swsCtx != nil {
+		C.sws_freeContext(video.swsCtx)
+		video.swsCtx = nil
+	}
 
 	return nil
 }

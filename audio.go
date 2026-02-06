@@ -167,3 +167,20 @@ func (audio *AudioStream) Close() error {
 
 	return nil
 }
+
+// DecoderContext returns the underlying decoder context for use in transcoding.
+// This is for internal use by the Transcoder.
+func (audio *AudioStream) DecoderContext() *C.AVCodecContext {
+	return audio.codecCtx
+}
+
+// RawFrame returns the underlying AVFrame after decoding.
+// This is for internal use by the Transcoder.
+func (audio *AudioStream) RawFrame() *C.AVFrame {
+	return audio.frame
+}
+
+// CodecParameters returns the codec parameters for passthrough mode.
+func (audio *AudioStream) CodecParameters() *C.AVCodecParameters {
+	return audio.codecParams
+}
