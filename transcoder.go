@@ -680,6 +680,15 @@ func (t *Transcoder) setupEncoders() error {
 			}
 		}
 
+		// Ensure even dimensions for YUV420P codecs (libx264, libx265, etc.)
+		if width%2 != 0 || height%2 != 0 {
+			width = width &^ 1
+			height = height &^ 1
+			if t.videoFilterSpec == "" {
+				t.videoFilterSpec = fmt.Sprintf("scale=%d:%d", width, height)
+			}
+		}
+
 		// Get frame rate for time base
 		frNum, frDen := t.videoStream.FrameRate()
 		timeBase := C.AVRational{num: C.int(frDen), den: C.int(frNum)}
