@@ -7,6 +7,18 @@ package reisen
 // #include <libavutil/imgutils.h>
 // #include <libswscale/swscale.h>
 // #include <inttypes.h>
+//
+// // Remap deprecated YUVJ pixel formats to standard YUV equivalents.
+// // Returns 1 if the format was remapped (caller should set full color range).
+// static int normalizePixFmt(enum AVPixelFormat *fmt) {
+//     switch (*fmt) {
+//     case AV_PIX_FMT_YUVJ420P: *fmt = AV_PIX_FMT_YUV420P; return 1;
+//     case AV_PIX_FMT_YUVJ422P: *fmt = AV_PIX_FMT_YUV422P; return 1;
+//     case AV_PIX_FMT_YUVJ444P: *fmt = AV_PIX_FMT_YUV444P; return 1;
+//     case AV_PIX_FMT_YUVJ440P: *fmt = AV_PIX_FMT_YUV440P; return 1;
+//     default: return 0;
+//     }
+// }
 import "C"
 
 import (
@@ -21,6 +33,36 @@ type VideoStream struct {
 	swsCtx    *C.struct_SwsContext
 	rgbaFrame *C.AVFrame
 	bufSize   C.int
+	// Stored for lazy SWS context init (image codecs where pix_fmt is unknown until first decode)
+	targetWidth  C.int
+	targetHeight C.int
+	targetAlg    C.int
+}
+
+// createSwsContext creates an SWS scaling context, handling deprecated YUVJ pixel
+// formats by remapping them to standard YUV equivalents with full color range.
+func (video *VideoStream) createSwsContext(srcFmt C.enum_AVPixelFormat) error {
+	fullRange := C.normalizePixFmt(&srcFmt)
+
+	video.swsCtx = C.sws_getContext(video.codecCtx.width,
+		video.codecCtx.height, srcFmt,
+		video.targetWidth, video.targetHeight,
+		C.AV_PIX_FMT_RGBA, video.targetAlg, nil, nil, nil)
+
+	if video.swsCtx == nil {
+		return fmt.Errorf("couldn't create an SWS context")
+	}
+
+	if fullRange != 0 {
+		// Set source color range to full (JPEG-style 0-255)
+		var inv_table *C.int
+		var table *C.int
+		var srcRange, dstRange, brightness, contrast, saturation C.int
+		C.sws_getColorspaceDetails(video.swsCtx, &inv_table, &srcRange, &table, &dstRange, &brightness, &contrast, &saturation)
+		C.sws_setColorspaceDetails(video.swsCtx, inv_table, 1, table, dstRange, brightness, contrast, saturation)
+	}
+
+	return nil
 }
 
 // AspectRatio returns the fraction of the video
@@ -90,17 +132,16 @@ func (video *VideoStream) OpenDecode(width, height int, alg InterpolationAlgorit
 		return fmt.Errorf(
 			"%d: couldn't fill the image arrays", status)
 	}
-	if video.codecCtx.pix_fmt < 0 {
-		return fmt.Errorf("Invalid Pixel Format, not able to convert")
-	}
-	video.swsCtx = C.sws_getContext(video.codecCtx.width,
-		video.codecCtx.height, video.codecCtx.pix_fmt,
-		C.int(width), C.int(height),
-		C.AV_PIX_FMT_RGBA, C.int(alg), nil, nil, nil)
+	video.targetWidth = C.int(width)
+	video.targetHeight = C.int(height)
+	video.targetAlg = C.int(alg)
 
-	if video.swsCtx == nil {
-		return fmt.Errorf(
-			"couldn't create an SWS context")
+	// For some codecs (e.g. PNG), pix_fmt is unknown until the first frame is decoded.
+	// Defer SWS context creation to ReadVideoFrame in that case.
+	if video.codecCtx.pix_fmt >= 0 {
+		if err := video.createSwsContext(video.codecCtx.pix_fmt); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -125,6 +166,21 @@ func (video *VideoStream) ReadVideoFrame() (*VideoFrame, bool, error) {
 
 	// No more data.
 	if !ok {
+		return nil, false, nil
+	}
+
+	// Lazy SWS context init for codecs where pix_fmt wasn't known at Open time
+	if video.swsCtx == nil {
+		if video.codecCtx.pix_fmt < 0 {
+			return nil, false, fmt.Errorf("invalid pixel format after decoding")
+		}
+		if err := video.createSwsContext(video.codecCtx.pix_fmt); err != nil {
+			return nil, false, err
+		}
+	}
+
+	// Skip frames with no pixel data (can happen with some image codecs)
+	if video.frame.data[0] == nil {
 		return nil, false, nil
 	}
 

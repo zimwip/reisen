@@ -72,6 +72,9 @@ func (media *Media) AudioStreams() []*AudioStream {
 // of the media file.
 func (media *Media) Duration() (time.Duration, error) {
 	dur := media.ctx.duration
+	if dur <= 0 {
+		return 0, nil
+	}
 	tm := float64(dur) / float64(TimeBase)
 
 	return time.ParseDuration(fmt.Sprintf("%fs", tm))
