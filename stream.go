@@ -179,18 +179,50 @@ func (stream *baseStream) BitRate() int64 {
 }
 
 // Duration returns the duration of the stream.
+// Uses the most reliable source: prefers the container-level duration
+// (AVFormatContext.duration) which is computed from all streams, falling
+// back to stream-level duration when the container value is unavailable.
 func (stream *baseStream) Duration() (time.Duration, error) {
-	dur := stream.inner.duration
+	// Gather duration from multiple sources and use the most reliable.
+	// FFmpeg duration metadata can be inaccurate depending on the container format.
 
-	if dur < 0 {
-		dur = 0
+	// Source 1: stream-level duration (AVStream.duration)
+	var streamSec float64
+	if stream.inner.duration > 0 {
+		tmNum, tmDen := stream.TimeBase()
+		factor := float64(tmNum) / float64(tmDen)
+		streamSec = float64(stream.inner.duration) * factor
 	}
 
-	tmNum, tmDen := stream.TimeBase()
-	factor := float64(tmNum) / float64(tmDen)
-	tm := float64(dur) * factor
+	// Source 2: container-level duration (AVFormatContext.duration)
+	var containerSec float64
+	if stream.media.ctx.duration > 0 {
+		containerSec = float64(stream.media.ctx.duration) / float64(C.AV_TIME_BASE)
+	}
 
-	return time.ParseDuration(fmt.Sprintf("%fs", tm))
+	// Source 3: computed from frame count and frame rate (most accurate when available)
+	var computedSec float64
+	nbFrames := int64(stream.inner.nb_frames)
+	frNum, frDen := stream.FrameRate()
+	if nbFrames > 0 && frNum > 0 && frDen > 0 {
+		fps := float64(frNum) / float64(frDen)
+		computedSec = float64(nbFrames) / fps
+	}
+
+	// Use the longest duration — shorter values are likely truncated estimates
+	best := streamSec
+	if containerSec > best {
+		best = containerSec
+	}
+	if computedSec > best {
+		best = computedSec
+	}
+
+	if best > 0 {
+		return time.ParseDuration(fmt.Sprintf("%fs", best))
+	}
+
+	return 0, nil
 }
 
 // TimeBase the numerator and the denominator of the
