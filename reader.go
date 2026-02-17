@@ -214,8 +214,8 @@ func NewMediaFromReader(reader io.ReadSeeker) (*Media, error) {
 		return nil, fmt.Errorf("couldn't create format context")
 	}
 
-	// 5. Allocate AVIO buffer (4KB is FFmpeg's recommended minimum)
-	const bufferSize = 4096
+	// 5. Allocate AVIO buffer
+	const bufferSize = 16384
 	ioBuffer := C.av_malloc(bufferSize)
 	if ioBuffer == nil {
 		C.avformat_free_context(ctx)
@@ -264,11 +264,13 @@ func NewMediaFromReader(reader io.ReadSeeker) (*Media, error) {
 	}
 
 	// 9. For pipe demuxers (images), avformat_find_stream_info consumes the
-	// data without seeking back. Reset to the beginning so ReadPacket
-	// starts from the actual image data.
+	// data without seeking back. Use av_seek_frame to properly reset the
+	// demuxer state, packet cache, and AVIO position so ReadPacket starts
+	// from the actual image data. (avio_seek + avformat_flush only resets
+	// the AVIO layer and codec buffers, leaving stale packets in the
+	// format context's internal packet buffer.)
 	if strings.HasSuffix(formatName, "_pipe") || formatName == "gif" {
-		C.avio_seek(ctx.pb, 0, C.SEEK_SET)
-		C.avformat_flush(ctx)
+		C.av_seek_frame(ctx, -1, 0, C.AVSEEK_FLAG_BACKWARD)
 	}
 
 	return media, nil
