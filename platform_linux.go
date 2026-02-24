@@ -3,8 +3,7 @@ package reisen
 import "C"
 
 func bufferSize(maxBufferSize C.int) C.ulong {
-	var byteSize C.ulong = 8
-	return C.ulong(maxBufferSize) * byteSize
+	return C.ulong(maxBufferSize)
 }
 
 func rewindPosition(dur int64) C.long {

@@ -87,6 +87,20 @@ func (audio *AudioStream) Open() error {
 	return nil
 }
 
+// Decode decodes the next audio packet into the raw frame without
+// sample format conversion. Use RawFrame() to access the decoded AVFrame.
+// Returns true if a frame was decoded, false for EOF or EAGAIN.
+func (audio *AudioStream) Decode() (bool, error) {
+	ok, err := audio.read()
+	if err != nil {
+		return false, err
+	}
+	if !ok || audio.skip {
+		return false, nil
+	}
+	return true, nil
+}
+
 // ReadFrame reads a new frame from the stream.
 func (audio *AudioStream) ReadFrame() (Frame, bool, error) {
 	return audio.ReadAudioFrame()

@@ -116,8 +116,10 @@ func (video *VideoStream) OpenDecode(width, height int, alg InterpolationAlgorit
 			"%d: couldn't get the buffer size", video.bufSize)
 	}
 
+	// Allocate with extra padding — sws_scale SIMD routines (SSE2/AVX2) can
+	// write a few bytes past the last scanline.
 	buf := (*C.uint8_t)(unsafe.Pointer(
-		C.av_malloc(bufferSize(video.bufSize))))
+		C.av_malloc(bufferSize(video.bufSize) + 64)))
 
 	if buf == nil {
 		return fmt.Errorf(
@@ -145,6 +147,24 @@ func (video *VideoStream) OpenDecode(width, height int, alg InterpolationAlgorit
 	}
 
 	return nil
+}
+
+// Decode decodes the next video packet into the raw frame without
+// pixel format conversion. Use RawFrame() to access the decoded AVFrame.
+// Returns true if a frame was decoded, false for EOF or EAGAIN.
+func (video *VideoStream) Decode() (bool, error) {
+	ok, err := video.read()
+	if err != nil {
+		return false, err
+	}
+	if !ok || video.skip {
+		return false, nil
+	}
+	// Skip frames with no pixel data (can happen with some image codecs)
+	if video.frame.data[0] == nil {
+		return false, nil
+	}
+	return true, nil
 }
 
 // ReadFrame reads the next frame from the stream.

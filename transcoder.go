@@ -308,8 +308,8 @@ func (t *Transcoder) Run(ctx context.Context) error {
 					}
 				}
 			} else if t.videoEncCtx != nil && t.videoStream != nil {
-				// Decode frame
-				_, gotFrame, err := t.videoStream.ReadVideoFrame()
+				// Decode frame (raw only — no RGBA conversion needed for transcoding)
+				gotFrame, err := t.videoStream.Decode()
 				if err != nil {
 					if t.onError != nil && !t.onError(err, frameCount) {
 						continue
@@ -382,8 +382,8 @@ func (t *Transcoder) Run(ctx context.Context) error {
 						}
 					}
 				} else if t.audioEncCtx != nil {
-					// Decode audio frame
-					_, gotFrame, err := t.audioStream.ReadAudioFrame()
+					// Decode audio frame (raw only — no sample conversion needed for transcoding)
+					gotFrame, err := t.audioStream.Decode()
 					if err != nil {
 						if t.onError != nil && !t.onError(err, frameCount) {
 							continue
