@@ -183,6 +183,7 @@ func (media *Media) OpenDecode() error {
 		return fmt.Errorf(
 			"couldn't allocate a new packet")
 	}
+	trackAlloc(ResAVPacket, unsafe.Pointer(media.packet))
 
 	return nil
 }
@@ -241,6 +242,7 @@ func (media *Media) ReadPacket() (*Packet, bool, error) {
 
 // CloseDecode closes the media container for decoding.
 func (media *Media) CloseDecode() error {
+	trackFree(unsafe.Pointer(media.packet))
 	C.av_packet_free(&media.packet)
 	media.packet = nil
 
@@ -249,29 +251,34 @@ func (media *Media) CloseDecode() error {
 
 // Close closes the media container.
 func (media *Media) Close() {
+	if media.ctx == nil {
+		return
+	}
+
+	// avformat_close_input closes the input, frees the format context,
+	// and sets the pointer to NULL. No separate avformat_free_context needed.
+	trackFree(unsafe.Pointer(media.ctx))
 	C.avformat_close_input(&media.ctx)
 
 	// Clean up custom AVIO context if present
-	// Note: avio_context_free does NOT free the buffer, we must do it
-	// But avformat_close_input may have already freed it depending on
-	// how the format context was opened. For custom AVIO, we allocated
-	// the buffer ourselves, but FFmpeg may reassign ctx->buffer internally.
+	// Note: avio_context_free does NOT free the buffer, we must do it.
+	// avformat_close_input does NOT free custom AVIO contexts — only
+	// contexts it allocated itself via avformat_open_input with a URL.
 	if media.ioctx != nil {
-		// Free the buffer that FFmpeg may have reallocated
 		if media.ioctx.buffer != nil {
 			C.av_free(unsafe.Pointer(media.ioctx.buffer))
 		}
 		C.avio_context_free(&media.ioctx)
 		media.ioctx = nil
 	}
-	media.ioBuffer = nil // Don't double-free; handled above
+	media.ioBuffer = nil
 
 	if media.readerID != 0 {
 		unregisterReader(media.readerID)
 		media.readerID = 0
 	}
 
-	C.avformat_free_context(media.ctx)
+	// ctx already freed by avformat_close_input above
 	media.ctx = nil
 }
 
@@ -287,18 +294,21 @@ func NewMedia(filename string) (*Media, error) {
 		return nil, fmt.Errorf(
 			"couldn't create a new media context")
 	}
+	trackAlloc(ResAVFormatContext, unsafe.Pointer(media.ctx))
 
 	fname := C.CString(filename)
+	defer C.free(unsafe.Pointer(fname))
 	status := C.avformat_open_input(&media.ctx, fname, nil, nil)
 
 	if status < 0 {
+		// Note: avformat_open_input frees ctx on failure and sets it to NULL
 		return nil, fmt.Errorf(
 			"couldn't open file %s", filename)
 	}
 
-	C.free(unsafe.Pointer(fname))
 	err := media.findStreams()
 	if err != nil {
+		media.Close()
 		return nil, err
 	}
 

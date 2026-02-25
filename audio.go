@@ -56,8 +56,9 @@ func (audio *AudioStream) Open() error {
 	}
 
 	var outputLayout C.AVChannelLayout
-	// var inputLayout C.AVChannelLayout
-	C.av_channel_layout_from_string(&outputLayout, C.CString("stereo"))
+	cStereo := C.CString("stereo")
+	C.av_channel_layout_from_string(&outputLayout, cStereo)
+	C.free(unsafe.Pointer(cStereo))
 	// C.av_channel_layout_from_mask(&inputLayout, audio.codecCtx.channel_layout)
 	C.swr_alloc_set_opts2(&audio.swrCtx,
 		&outputLayout,
@@ -74,10 +75,14 @@ func (audio *AudioStream) Open() error {
 		return fmt.Errorf(
 			"couldn't allocate an SWR context")
 	}
+	trackAlloc(ResSwrContext, unsafe.Pointer(audio.swrCtx))
 
 	status := C.swr_init(audio.swrCtx)
 
 	if status < 0 {
+		trackFree(unsafe.Pointer(audio.swrCtx))
+		C.swr_free(&audio.swrCtx)
+		audio.swrCtx = nil
 		return fmt.Errorf(
 			"%d: couldn't initialize the SWR context", status)
 	}
@@ -176,6 +181,7 @@ func (audio *AudioStream) Close() error {
 
 	C.av_free(unsafe.Pointer(audio.buffer))
 	audio.buffer = nil
+	trackFree(unsafe.Pointer(audio.swrCtx))
 	C.swr_free(&audio.swrCtx)
 	audio.swrCtx = nil
 

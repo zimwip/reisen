@@ -246,6 +246,8 @@ func NewMediaFromReader(reader io.ReadSeeker) (*Media, error) {
 	}
 	status := C.avformat_open_input(&ctx, nil, inputFmt, nil)
 	if status < 0 {
+		// avio_context_free does NOT free the buffer; free it explicitly
+		C.av_free(ioBuffer)
 		C.avio_context_free(&ioctx)
 		unregisterReader(id)
 		return nil, fmt.Errorf("couldn't open input: %d", status)

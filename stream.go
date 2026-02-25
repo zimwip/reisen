@@ -265,6 +265,8 @@ func (stream *baseStream) ApplyFilter(args string) error {
 	status = C.avcodec_parameters_copy(stream.filterCtx.par_in, stream.codecParams)
 
 	if status < 0 {
+		C.av_bsf_free(&stream.filterCtx)
+		stream.filterCtx = nil
 		return fmt.Errorf(
 			"%d: couldn't copy the input codec parameters to the filter", status)
 	}
@@ -272,6 +274,8 @@ func (stream *baseStream) ApplyFilter(args string) error {
 	status = C.avcodec_parameters_copy(stream.filterCtx.par_out, stream.codecParams)
 
 	if status < 0 {
+		C.av_bsf_free(&stream.filterCtx)
+		stream.filterCtx = nil
 		return fmt.Errorf(
 			"%d: couldn't copy the output codec parameters to the filter", status)
 	}
@@ -282,6 +286,8 @@ func (stream *baseStream) ApplyFilter(args string) error {
 	status = C.av_bsf_init(stream.filterCtx)
 
 	if status < 0 {
+		C.av_bsf_free(&stream.filterCtx)
+		stream.filterCtx = nil
 		return fmt.Errorf(
 			"%d: couldn't initialize the filter context", status)
 	}
@@ -289,13 +295,19 @@ func (stream *baseStream) ApplyFilter(args string) error {
 	stream.filterInPacket = C.av_packet_alloc()
 
 	if stream.filterInPacket == nil {
+		C.av_bsf_free(&stream.filterCtx)
+		stream.filterCtx = nil
 		return fmt.Errorf(
 			"couldn't allocate a packet for filtering in")
 	}
 
 	stream.filterOutPacket = C.av_packet_alloc()
 
-	if stream.filterInPacket == nil {
+	if stream.filterOutPacket == nil {
+		C.av_packet_free(&stream.filterInPacket)
+		stream.filterInPacket = nil
+		C.av_bsf_free(&stream.filterCtx)
+		stream.filterCtx = nil
 		return fmt.Errorf(
 			"couldn't allocate a packet for filtering out")
 	}
@@ -391,11 +403,14 @@ func (stream *baseStream) open() error {
 	if stream.codecCtx == nil {
 		return fmt.Errorf("couldn't open a codec context")
 	}
+	trackAlloc(ResAVCodecContext, unsafe.Pointer(stream.codecCtx))
 
 	status := C.avcodec_parameters_to_context(
 		stream.codecCtx, stream.codecParams)
 
 	if status < 0 {
+		trackFree(unsafe.Pointer(stream.codecCtx))
+		C.avcodec_free_context(&stream.codecCtx)
 		return fmt.Errorf(
 			"%d: couldn't send codec parameters to the context", status)
 	}
@@ -403,6 +418,8 @@ func (stream *baseStream) open() error {
 	status = C.avcodec_open2(stream.codecCtx, stream.codec, nil)
 
 	if status < 0 {
+		trackFree(unsafe.Pointer(stream.codecCtx))
+		C.avcodec_free_context(&stream.codecCtx)
 		return fmt.Errorf(
 			"%d: couldn't open the codec context", status)
 	}
@@ -410,9 +427,12 @@ func (stream *baseStream) open() error {
 	stream.frame = C.av_frame_alloc()
 
 	if stream.frame == nil {
+		trackFree(unsafe.Pointer(stream.codecCtx))
+		C.avcodec_free_context(&stream.codecCtx)
 		return fmt.Errorf(
 			"couldn't allocate a new frame")
 	}
+	trackAlloc(ResAVFrame, unsafe.Pointer(stream.frame))
 
 	stream.opened = true
 
@@ -470,15 +490,11 @@ func (stream *baseStream) read() (bool, error) {
 
 // close closes the stream for decoding.
 func (stream *baseStream) close() error {
+	trackFree(unsafe.Pointer(stream.frame))
 	C.av_frame_free(&stream.frame)
 	stream.frame = nil
 
-	// status := C.avcodec_free_context(&stream.codecCtx)
-	// if status < 0 {
-	// 	return fmt.Errorf(
-	// 		"%d: couldn't close the codec", status)
-	// }
-
+	trackFree(unsafe.Pointer(stream.codecCtx))
 	C.avcodec_free_context(&stream.codecCtx)
 
 	if stream.filterCtx != nil {

@@ -52,6 +52,7 @@ func (video *VideoStream) createSwsContext(srcFmt C.enum_AVPixelFormat) error {
 	if video.swsCtx == nil {
 		return fmt.Errorf("couldn't create an SWS context")
 	}
+	trackAlloc(ResSwsContext, unsafe.Pointer(video.swsCtx))
 
 	if fullRange != 0 {
 		// Set source color range to full (JPEG-style 0-255)
@@ -112,6 +113,8 @@ func (video *VideoStream) OpenDecode(width, height int, alg InterpolationAlgorit
 		C.AV_PIX_FMT_RGBA, C.int(width), C.int(height), 1)
 
 	if video.bufSize < 0 {
+		C.av_frame_free(&video.rgbaFrame)
+		video.rgbaFrame = nil
 		return fmt.Errorf(
 			"%d: couldn't get the buffer size", video.bufSize)
 	}
@@ -122,6 +125,8 @@ func (video *VideoStream) OpenDecode(width, height int, alg InterpolationAlgorit
 		C.av_malloc(bufferSize(video.bufSize) + 64)))
 
 	if buf == nil {
+		C.av_frame_free(&video.rgbaFrame)
+		video.rgbaFrame = nil
 		return fmt.Errorf(
 			"couldn't allocate an AV buffer")
 	}
@@ -131,6 +136,9 @@ func (video *VideoStream) OpenDecode(width, height int, alg InterpolationAlgorit
 		C.int(width), C.int(height), 1)
 
 	if status < 0 {
+		C.av_free(unsafe.Pointer(buf))
+		C.av_frame_free(&video.rgbaFrame)
+		video.rgbaFrame = nil
 		return fmt.Errorf(
 			"%d: couldn't fill the image arrays", status)
 	}
@@ -142,6 +150,9 @@ func (video *VideoStream) OpenDecode(width, height int, alg InterpolationAlgorit
 	// Defer SWS context creation to ReadVideoFrame in that case.
 	if video.codecCtx.pix_fmt >= 0 {
 		if err := video.createSwsContext(video.codecCtx.pix_fmt); err != nil {
+			C.av_free(unsafe.Pointer(video.rgbaFrame.data[0]))
+			C.av_frame_free(&video.rgbaFrame)
+			video.rgbaFrame = nil
 			return err
 		}
 	}
@@ -235,6 +246,7 @@ func (video *VideoStream) Close() error {
 		video.rgbaFrame = nil
 	}
 	if video.swsCtx != nil {
+		trackFree(unsafe.Pointer(video.swsCtx))
 		C.sws_freeContext(video.swsCtx)
 		video.swsCtx = nil
 	}
